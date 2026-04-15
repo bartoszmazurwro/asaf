@@ -231,6 +231,8 @@ class MPD:
         self, order: int, tolerance: float, lnp: Optional[pd.DataFrame] = None
     ) -> None:
         """Check the probability at the tail of the lnp distribution."""
+        if getattr(self, "_suppress_check_tail", False):
+            return
         if lnp is None:
             lnp = self.lnp
         mins = self.minimums(lnp=lnp["lnp"], order=order)
@@ -274,65 +276,105 @@ class MPD:
         else:
             return lnp_rw
 
-    # TODO: optimize search method and test for edge cases
     def find_phase_equilibrium(
         self,
+            delta_beta_mu_guess: Optional[float] = None,
         tolerance: float = 1e-6,
-        max_iterations: int = 100,
         return_probabilities: bool = False,
     ) -> Union[Tuple[float, float, float], float]:
         """Find the fugacity at which the two phases are in equilibrium.
 
+        Uses ``minimize_scalar`` (Brent's method) on an objective that is zero
+        only when the low-density and high-density phase probabilities are
+        equal.  The objective is designed to guide the optimizer smoothly
+        through unimodal, degenerate, and bimodal regimes.
+
         Parameters
         ----------
+        delta_beta_mu_guess
+            Initial hint for the shift in beta*mu that brings the distribution
+            closer to equilibrium.  Passed to ``minimize_scalar`` as a bracket
+            starting point — the optimizer **can search beyond** this value.
+            If ``None``, the direction is auto-detected from the current
+            distribution shape.
         tolerance
-            Tolerance for the root finding algorithm.
-        max_iterations
-            Maximum number of iterations for the root finding algorithm.
+            Tolerance for the minimization algorithm.
         return_probabilities
             Whether to return the probabilities of the two phases at equilibrium.
 
         Returns
         -------
         float or Tuple[float, float, float]
-            The fugacity at which the two phases are in equilibrium. If `return_probabilities`
-            is True, also returns the probabilities of the two phases at equilibrium.
+            The fugacity at which the two phases are in equilibrium. If
+            ``return_probabilities`` is True, returns
+            ``(fugacity, p_low, p_high)``.
+
+        Raises
+        ------
+        RuntimeError
+            If no phase equilibrium is found (distribution remains unimodal
+            at the optimizer's solution).
         """
-        from scipy.optimize import newton
+        from scipy.optimize import minimize_scalar
         from scipy.special import logsumexp
 
-        def objective(beta_mu) -> float:
-            delta_beta_mu = beta_mu - self.beta_mu
-            lnp = self.reweight(delta_beta_mu)
-            min_index = self.minimums(order=self._order, lnp=lnp["lnp"])
-            if len(min_index) == 0:
-                return float(lnp.lnp.values[0] - lnp.lnp.values[-1]) ** 2
-            min_index = min_index[min_index.lnp == min_index.lnp.min()].index[0]
-            logsum_low = logsumexp(lnp.lnp[:min_index])
-            logsum_high = logsumexp(lnp.lnp[min_index:])
-            return logsum_low - logsum_high
+        def objective(delta_beta_mu: float) -> float:
+            lnp_rw = self.reweight(delta_beta_mu)
+            mins = self.minimums(order=self._order, lnp=lnp_rw["lnp"])
 
-        equilibrium_beta_mu = newton(
-            objective, self.beta_mu, tol=tolerance, maxiter=max_iterations
-        )
+            if len(mins) == 0:
+                return 2.0 + float(
+                    lnp_rw["lnp"].iloc[0] - lnp_rw["lnp"].iloc[-1]
+                ) ** 2
+
+            min_idx = int(mins[mins.lnp == mins.lnp.min()].index[0])
+            p_low = float(np.exp(logsumexp(lnp_rw["lnp"].iloc[:min_idx])))
+            p_high = float(np.exp(logsumexp(lnp_rw["lnp"].iloc[min_idx + 1:])))
+
+            if abs(p_low - 1) < 1e-6:
+                return 1.1 + float(np.exp(-delta_beta_mu))
+            if abs(p_high - 1) < 1e-6:
+                return 1.1 + float(np.exp(delta_beta_mu))
+
+            return abs(p_low - p_high)
+
+        if delta_beta_mu_guess is None:
+            edge_bias = float(self.lnp["lnp"].iloc[0] - self.lnp["lnp"].iloc[-1])
+            delta_beta_mu_guess = 0.5 if edge_bias > 0 else -0.5
+
+        self._suppress_check_tail = True
+        try:
+            result = minimize_scalar(
+                objective,
+                bracket=(0, delta_beta_mu_guess),
+                tol=tolerance,
+            )
+        finally:
+            self._suppress_check_tail = False
+
+        delta_beta_mu_eq = result.x
+
+        # Final validation with check_tail enabled
+        lnp_eq = self.reweight(delta_beta_mu_eq)
+        mins = self.minimums(order=self._order, lnp=lnp_eq["lnp"])
+
+        if len(mins) == 0:
+            raise RuntimeError(
+                "No phase equilibrium found: distribution remains unimodal."
+            )
+
+        min_idx = int(mins[mins.lnp == mins.lnp.min()].index[0])
+        p_low = float(np.exp(logsumexp(lnp_eq["lnp"].iloc[:min_idx])))
+        p_high = float(np.exp(logsumexp(lnp_eq["lnp"].iloc[min_idx + 1:])))
+
+        equilibrium_beta_mu = self.beta_mu + delta_beta_mu_eq
         equilibrium_fugacity = mu_to_fugacity(
             equilibrium_beta_mu / self._beta, self._beta
         )
 
-        equilibrium_lnp = self.reweight_to_fug(equilibrium_fugacity, inplace=False)
-        equilibrium_min_index = self.minimums(order=self._order, lnp=equilibrium_lnp)
-        equilibrium_min_index = equilibrium_min_index[
-            equilibrium_min_index.lnp == equilibrium_min_index.lnp.min()
-        ].index[0]
-        equilibrium_logsum_low = logsumexp(equilibrium_lnp.lnp[:equilibrium_min_index])
-        equilibrium_logsum_high = logsumexp(equilibrium_lnp.lnp[equilibrium_min_index:])
-        equilibrium_p_low = float(np.exp(equilibrium_logsum_low))
-        equilibrium_p_high = float(np.exp(equilibrium_logsum_high))
-
         if return_probabilities:
-            return equilibrium_fugacity, equilibrium_p_low, equilibrium_p_high
-        else:
-            return equilibrium_fugacity
+            return equilibrium_fugacity, p_low, p_high
+        return equilibrium_fugacity
 
     def average_macrostate(self, lnp: Optional[pd.DataFrame] = None) -> float:
         """Calculate the average macrostate from the MPD data.
@@ -348,10 +390,13 @@ class MPD:
         """Find the local minimums in the lnp data."""
         if lnp is None:
             lnp = self._dataframe["lnp"]
+        elif isinstance(lnp, pd.DataFrame):
+            lnp = lnp["lnp"]
         min_loc = argrelextrema(lnp.values, np.less, order=order)[0]
         min_loc = min_loc[(10 < min_loc) & (min_loc < lnp.shape[0] - 10)]
-
-        return self._dataframe.iloc[min_loc]
+        minima = self._dataframe.iloc[min_loc][["macrostate"]].copy()
+        minima["lnp"] = lnp.iloc[min_loc].to_numpy()
+        return minima
 
     def plot(
         self,

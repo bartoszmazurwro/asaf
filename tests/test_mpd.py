@@ -76,7 +76,7 @@ def test_mpd_equilibrium_and_observables() -> None:
     mpd = MPD(dataframe=pd.read_csv(data_path), temperature=144.3, beta_mu=-2.902929)
     equilibrium_fugacity, p_low, p_high = mpd.find_phase_equilibrium(
         return_probabilities=True
-    )
+    )  # type: ignore[misc]
     assert p_low == pytest.approx(0.5, rel=1e-4)
     assert p_high == pytest.approx(0.5, rel=1e-4)
     mpd.reweight_to_fug(equilibrium_fugacity, inplace=True)
@@ -89,3 +89,21 @@ def test_mpd_equilibrium_and_observables() -> None:
     density_high = average_macrostate[1] / volume
     assert density_low == pytest.approx(1.0030e-01, rel=1e-2)
     assert density_high == pytest.approx(5.6329e-01, rel=1e-2)
+
+
+def test_phase_equilibrium_low_barrier() -> None:
+    """Regression test for a low-barrier MPD where the old Newton search crashed."""
+    data_path = Path(__file__).parent / "problematic_equilibrium_search.csv"
+    mpd = MPD(
+        dataframe=pd.read_csv(data_path),
+        temperature=298.0,
+        beta_mu=-14.313696805080005,
+        order=50,
+    )
+
+    fugacity, p_low, p_high = mpd.find_phase_equilibrium(
+        return_probabilities=True
+    )  # type: ignore[misc]
+    assert np.isfinite(float(fugacity))
+    assert p_low == pytest.approx(0.5, rel=2e-2)
+    assert p_high == pytest.approx(0.5, rel=2e-2)

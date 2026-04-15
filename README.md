@@ -3,6 +3,9 @@
 ***ASAF** (Adsorption Simulation Analysis Facilitator)* is a python library created to facilitate the processing and
 analysis of data from grand canonical transition matrix Monte Carlo adsorption simulations.
 
+> [!WARNING]
+> ASAF is under active development. Backward compatibility with older versions is not currently guaranteed.
+
 ### Features:
 
 - calculation of the macrostate probability distribution (MPC) from the transition probabilities
