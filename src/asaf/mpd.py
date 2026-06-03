@@ -281,26 +281,30 @@ class MPD:
             delta_beta_mu_guess: Optional[float] = None,
         tolerance: float = 1e-6,
         return_probabilities: bool = False,
+            max_delta_beta_mu: float = 8.0,
     ) -> Union[Tuple[float, float, float], float]:
         """Find the fugacity at which the two phases are in equilibrium.
 
-        Uses ``minimize_scalar`` (Brent's method) on an objective that is zero
-        only when the low-density and high-density phase probabilities are
-        equal.  The objective is designed to guide the optimizer smoothly
-        through unimodal, degenerate, and bimodal regimes.
+        Uses a bounded phase-balance search.  The search follows the physical
+        direction of the current MPD: if the low-density phase dominates it
+        shifts toward higher fugacity, and if the high-density phase dominates
+        it shifts toward lower fugacity.
 
         Parameters
         ----------
         delta_beta_mu_guess
             Initial hint for the shift in beta*mu that brings the distribution
-            closer to equilibrium.  Passed to ``minimize_scalar`` as a bracket
-            starting point — the optimizer **can search beyond** this value.
-            If ``None``, the direction is auto-detected from the current
-            distribution shape.
+            closer to equilibrium.  If provided, its sign is tried first and
+            its magnitude is used as the first bracketing step.  If ``None``,
+            the direction is auto-detected from the current distribution shape.
         tolerance
-            Tolerance for the minimization algorithm.
+            Tolerance for the phase-probability balance.
         return_probabilities
             Whether to return the probabilities of the two phases at equilibrium.
+        max_delta_beta_mu
+            Maximum absolute shift in beta*mu explored during bracketing.  Since
+            fugacity scales as ``exp(delta_beta_mu)``, this bounds the fugacity
+            search and prevents excursions to unphysical values.
 
         Returns
         -------
@@ -313,46 +317,164 @@ class MPD:
         ------
         RuntimeError
             If no phase equilibrium is found (distribution remains unimodal
-            at the optimizer's solution).
+            inside the bounded fugacity search).
         """
-        from scipy.optimize import minimize_scalar
         from scipy.special import logsumexp
 
-        def objective(delta_beta_mu: float) -> float:
-            lnp_rw = self.reweight(delta_beta_mu)
-            mins = self.minimums(order=self._order, lnp=lnp_rw["lnp"])
+        if not np.isfinite(max_delta_beta_mu) or max_delta_beta_mu <= 0:
+            raise ValueError("`max_delta_beta_mu` must be finite and positive.")
 
-            if len(mins) == 0:
-                return 2.0 + float(
-                    lnp_rw["lnp"].iloc[0] - lnp_rw["lnp"].iloc[-1]
-                ) ** 2
+        macrostate = self.lnp["macrostate"].to_numpy(dtype=float)
+        lnp = self.lnp["lnp"].to_numpy(dtype=float)
+        macrostate_span = macrostate[-1] - macrostate[0]
 
-            min_idx = int(mins[mins.lnp == mins.lnp.min()].index[0])
-            p_low = float(np.exp(logsumexp(lnp_rw["lnp"].iloc[:min_idx])))
-            p_high = float(np.exp(logsumexp(lnp_rw["lnp"].iloc[min_idx + 1:])))
+        # Gas-like phases in adsorption MPDs sit near the low-N boundary.  A
+        # unimodal distribution outside that region is treated as the dense
+        # phase and nudged to lower fugacity.
+        single_phase_low_fraction = 0.25
 
-            if abs(p_low - 1) < 1e-6:
-                return 1.1 + float(np.exp(-delta_beta_mu))
-            if abs(p_high - 1) < 1e-6:
-                return 1.1 + float(np.exp(delta_beta_mu))
+        def phase_balance(
+                delta_beta_mu: float,
+        ) -> dict[str, bool | float | None]:
+            lnp_rw = lnp + delta_beta_mu * macrostate
+            lnp_rw = lnp_rw - logsumexp(lnp_rw)
+            min_loc = argrelextrema(lnp_rw, np.less, order=self._order)[0]
+            min_loc = min_loc[(10 < min_loc) & (min_loc < lnp_rw.shape[0] - 10)]
 
-            return abs(p_low - p_high)
+            if len(min_loc) > 0:
+                min_idx = int(min_loc[np.argmin(lnp_rw[min_loc])])
+                p_low = float(np.exp(logsumexp(lnp_rw[:min_idx])))
+                p_high = float(np.exp(logsumexp(lnp_rw[min_idx + 1:])))
+                return {
+                    "delta": delta_beta_mu,
+                    "balance": p_high - p_low,
+                    "two_phase": True,
+                    "p_low": p_low,
+                    "p_high": p_high,
+                }
 
-        if delta_beta_mu_guess is None:
-            edge_bias = float(self.lnp["lnp"].iloc[0] - self.lnp["lnp"].iloc[-1])
-            delta_beta_mu_guess = 0.5 if edge_bias > 0 else -0.5
-
-        self._suppress_check_tail = True
-        try:
-            result = minimize_scalar(
-                objective,
-                bracket=(0, delta_beta_mu_guess),
-                tol=tolerance,
+            mode_idx = int(np.argmax(lnp_rw))
+            mode_fraction = (
+                (macrostate[mode_idx] - macrostate[0]) / macrostate_span
+                if macrostate_span > 0
+                else 0.0
             )
-        finally:
-            self._suppress_check_tail = False
+            balance = -1.0 if mode_fraction <= single_phase_low_fraction else 1.0
+            return {
+                "delta": delta_beta_mu,
+                "balance": balance,
+                "two_phase": False,
+                "p_low": None,
+                "p_high": None,
+            }
 
-        delta_beta_mu_eq = result.x
+        def best_two_phase(
+                best: dict[str, bool | float | None] | None,
+                candidate: dict[str, bool | float | None],
+                prefer_low_side: bool = False,
+        ) -> dict[str, bool | float | None] | None:
+            if not candidate["two_phase"]:
+                return best
+            if prefer_low_side and float(candidate["balance"]) > 0:
+                return best
+            if best is None:
+                return candidate
+            if abs(float(candidate["balance"])) < abs(float(best["balance"])):
+                return candidate
+            return best
+
+        def bracket_in_direction(
+                direction: float,
+                start: dict[str, bool | float | None],
+        ) -> (
+                tuple[
+                    dict[str, bool | float | None],
+                    dict[str, bool | float | None],
+                    dict[str, bool | float | None] | None,
+                    dict[str, bool | float | None] | None,
+                ]
+                | None
+        ):
+            previous = start
+            best = best_two_phase(None, start)
+            best_low_side = best_two_phase(None, start, prefer_low_side=True)
+            step = abs(delta_beta_mu_guess) if delta_beta_mu_guess else 0.05
+            step = min(max(step, 0.05), max_delta_beta_mu)
+
+            while step <= max_delta_beta_mu:
+                delta = direction * step
+                current = phase_balance(delta)
+                best = best_two_phase(best, current)
+                best_low_side = best_two_phase(
+                    best_low_side, current, prefer_low_side=True
+                )
+
+                if float(previous["balance"]) * float(current["balance"]) <= 0:
+                    return previous, current, best, best_low_side
+
+                if step == max_delta_beta_mu:
+                    break
+
+                previous = current
+                step = min(step * 1.6, max_delta_beta_mu)
+
+            return None
+
+        start = phase_balance(0.0)
+        if (
+                start["two_phase"]
+                and abs(float(start["balance"])) <= tolerance
+                and float(start["balance"]) <= 0
+        ):
+            best = start
+        else:
+            if delta_beta_mu_guess is None or delta_beta_mu_guess == 0:
+                direction = 1.0 if float(start["balance"]) < 0 else -1.0
+            else:
+                direction = float(np.sign(delta_beta_mu_guess))
+            bracket = bracket_in_direction(direction, start)
+            if bracket is None:
+                bracket = bracket_in_direction(-direction, start)
+            if bracket is None:
+                raise RuntimeError(
+                    "No phase equilibrium found within the bounded fugacity search."
+                )
+
+            left, right, best, best_low_side = bracket
+            if float(left["delta"]) > float(right["delta"]):
+                left, right = right, left
+
+            for _ in range(80):
+                if (
+                        best_low_side is not None
+                        and abs(float(best_low_side["balance"])) <= tolerance
+                ):
+                    best = best_low_side
+                    break
+
+                midpoint = 0.5 * (float(left["delta"]) + float(right["delta"]))
+                middle = phase_balance(midpoint)
+                best = best_two_phase(best, middle)
+                best_low_side = best_two_phase(
+                    best_low_side, middle, prefer_low_side=True
+                )
+
+                if float(left["balance"]) * float(middle["balance"]) <= 0:
+                    right = middle
+                else:
+                    left = middle
+
+            if best is None:
+                raise RuntimeError(
+                    "No phase equilibrium found: distribution remains unimodal."
+                )
+            if (
+                    best_low_side is not None
+                    and abs(float(best_low_side["balance"])) <= tolerance
+            ):
+                best = best_low_side
+
+        delta_beta_mu_eq = float(best["delta"])
 
         # Final validation with check_tail enabled
         lnp_eq = self.reweight(delta_beta_mu_eq)

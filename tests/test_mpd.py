@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,27 @@ pytest.importorskip("plotly.graph_objects")
 pytest.importorskip("scipy.signal")
 
 from asaf.mpd import MPD, normalize
+
+DATA_DIR = Path(__file__).parent / "data"
+
+
+def _water_mpd_paths() -> list[Path]:
+    return sorted(
+        DATA_DIR.glob("mpd_water_*.csv"),
+        key=lambda path: int(path.stem.rsplit("_", maxsplit=1)[1]),
+    )
+
+
+def _water_mpd(path: Path) -> MPD:
+    with open(DATA_DIR / "mpd_water.metadata.json") as metadata_file:
+        metadata = json.load(metadata_file)
+
+    return MPD(
+        dataframe=pd.read_csv(path),
+        temperature=metadata["temperature"],
+        beta_mu=metadata["beta_mu"],
+        order=50,
+    )
 
 
 def test_mpd_requires_probability_or_lnp_columns() -> None:
@@ -72,7 +94,7 @@ def test_mpd_equilibrium_and_observables() -> None:
     (https://www.nist.gov/programs-projects/nist-standard-reference-simulation-website)
     (https://mmlapps.nist.gov/srs/LJ_PURE/eostmmc.htm)
     """
-    data_path = Path(__file__).parent / "data" / "mpd_lj_120.csv"
+    data_path = DATA_DIR / "mpd_lj_120.csv"
     mpd = MPD(dataframe=pd.read_csv(data_path), temperature=144.3, beta_mu=-2.902929)
     equilibrium_fugacity, p_low, p_high = mpd.find_phase_equilibrium(
         return_probabilities=True
@@ -91,19 +113,22 @@ def test_mpd_equilibrium_and_observables() -> None:
     assert density_high == pytest.approx(5.6329e-01, rel=1e-2)
 
 
-def test_phase_equilibrium_low_barrier() -> None:
-    """Regression test for a low-barrier MPD where the old Newton search crashed."""
-    data_path = Path(__file__).parent / "problematic_equilibrium_search.csv"
-    mpd = MPD(
-        dataframe=pd.read_csv(data_path),
-        temperature=298.0,
-        beta_mu=-14.313696805080005,
-        order=50,
-    )
+@pytest.mark.parametrize(
+    "data_path",
+    _water_mpd_paths(),
+    ids=lambda path: path.name,
+)
+def test_phase_equilibrium_problematic_water_examples(data_path: Path) -> None:
+    """Regression tests for MPDs that need directional fugacity bracketing."""
+    mpd = _water_mpd(data_path)
+    initial_fugacity = mpd.fugacity
 
     fugacity, p_low, p_high = mpd.find_phase_equilibrium(
         return_probabilities=True
     )  # type: ignore[misc]
+    delta_beta_mu = np.log(float(fugacity) / initial_fugacity)
+
     assert np.isfinite(float(fugacity))
-    assert p_low == pytest.approx(0.5, rel=2e-2)
-    assert p_high == pytest.approx(0.5, rel=2e-2)
+    assert abs(delta_beta_mu) < 2.5
+    assert p_low == pytest.approx(p_high, abs=1e-4)
+    assert p_low == pytest.approx(0.5, rel=2e-3)
