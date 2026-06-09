@@ -1,0 +1,9 @@
+include CHANGELOG.md
+include CONTRIBUTING.md
+include LICENSE
+include README.md
+include mkdocs.yml
+include uv.lock
+recursive-include docs *.md *.png
+recursive-include tests *.py *.csv *.json
+recursive-include .github/workflows *.yml

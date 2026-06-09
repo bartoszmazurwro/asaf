@@ -9,6 +9,7 @@ site_url: https://bartoszmazurwro.github.io/asaf/
 nav:
   - Home: index.md
   - Installation guide: installation.md
+  - Contributing: contributing.md
   - Reference:
       - Overview: reference/index.md
       - MPD: reference/mpd.md

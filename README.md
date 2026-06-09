@@ -1,5 +1,14 @@
 # Quick and easy analysis of the data from the flat histogram simulations
 
+[![Tests](https://github.com/bartoszmazurwro/asaf/actions/workflows/tests.yml/badge.svg)](https://github.com/bartoszmazurwro/asaf/actions/workflows/tests.yml)
+[![Ruff](https://github.com/bartoszmazurwro/asaf/actions/workflows/ruff.yml/badge.svg)](https://github.com/bartoszmazurwro/asaf/actions/workflows/ruff.yml)
+[![Docs](https://github.com/bartoszmazurwro/asaf/actions/workflows/docs.yml/badge.svg)](https://github.com/bartoszmazurwro/asaf/actions/workflows/docs.yml)
+[![Codecov](https://codecov.io/gh/bartoszmazurwro/asaf/branch/main/graph/badge.svg)](https://codecov.io/gh/bartoszmazurwro/asaf)
+[![PyPI](https://img.shields.io/pypi/v/asaf.svg)](https://pypi.org/project/asaf/)
+[![Python versions](https://img.shields.io/pypi/pyversions/asaf.svg)](https://pypi.org/project/asaf/)
+[![License](https://img.shields.io/github/license/bartoszmazurwro/asaf.svg)](LICENSE)
+[![Paper DOI](https://img.shields.io/badge/DOI-10.1021%2Facsami.4c02616-blue)](https://doi.org/10.1021/acsami.4c02616)
+
 ***ASAF** (Adsorption Simulation Analysis Facilitator)* is a python library created to facilitate the processing and
 analysis of data from grand canonical transition matrix Monte Carlo adsorption simulations.
 
@@ -15,9 +24,32 @@ analysis of data from grand canonical transition matrix Monte Carlo adsorption s
 - temperature extrapolation of the macrostate probability distribution
 - saving the isotherms to an AIF file
 
-### Download
+### Installation
 
-To download simply type in your terminal `pip install "asaf @ git+https://github.com/bartoszmazurwro/asaf.git"`
+For the latest PyPI release:
+
+```bash
+pip install asaf
+```
+
+For the development version:
+
+```bash
+pip install "asaf @ git+https://github.com/bartoszmazurwro/asaf.git"
+```
+
+### Development
+
+ASAF uses `uv` for local development. To set up the repository:
+
+```bash
+git clone https://github.com/bartoszmazurwro/asaf.git
+cd asaf
+uv sync --locked --all-extras --dev
+uv run pytest
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full development, testing, and release workflow.
 
 ### Citing
 

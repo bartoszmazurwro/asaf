@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools", "setuptools-scm"]
+requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -10,8 +10,26 @@ authors = [
 ]
 description = "Library to facilitate the processing and analysis of data from the grand canonical transition matrix Monte Carlo adsorption simulations."
 readme = "README.md"
-license = { text = "MIT license" }
+license = "MIT"
 requires-python = ">=3.11"
+keywords = [
+    "adsorption",
+    "isotherm",
+    "molecular simulation",
+    "monte carlo",
+    "transition matrix monte carlo",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "Topic :: Scientific/Engineering :: Physics",
+]
 dependencies = [
     "numpy",
     "scipy",
@@ -21,18 +39,18 @@ dependencies = [
     "plotly",
 ]
 
+[project.urls]
+Documentation = "https://bartoszmazurwro.github.io/asaf/"
+Homepage = "https://github.com/bartoszmazurwro/asaf"
+Issues = "https://github.com/bartoszmazurwro/asaf/issues"
+Repository = "https://github.com/bartoszmazurwro/asaf"
+
 [tool.setuptools.package-dir]
 "" = "src"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = [
-    "asaf",
-    "asaf.mpd",
-    "asaf.constants",
-    "asaf.isotherm",
-    "asaf.utils",
-]
+include = ["asaf*"]
 
 [dependency-groups]
 lint = [
@@ -107,6 +125,6 @@ docstring-code-line-length = "dynamic"
 pre-summary-newline = true
 black = true
 
-[tool.ruff.per-file-ignores]
+[tool.ruff.lint.per-file-ignores]
 "tests/**" = ["D"]
 "*_test.py" = ["D"]

@@ -69,6 +69,15 @@ class Framework(object):
         charges : list, optional
             List of partial charges for each site. If None, all charges will be set to zero.
         """
+        lattice = np.asarray(lattice, dtype=float)
+        coordinates = np.asarray(coordinates, dtype=float)
+        sites = list(sites)
+
+        if coordinates.shape != (len(sites), 3):
+            raise ValueError(
+                "`coordinates` must be a two-dimensional array with shape (n_sites, 3)."
+            )
+
         if lattice_as_matrix:
             if lattice.shape != (3, 3):
                 raise ValueError(
@@ -79,6 +88,7 @@ class Framework(object):
             self._cell_lengths = (a, b, c)
             self._cell_angles = (alpha, beta, gamma)
         else:
+            lattice = lattice.ravel()
             if len(lattice) != 6:
                 raise ValueError(
                     "If `lattice_as_matrix` is False, `lattice` must be a list of six floats."
@@ -91,10 +101,14 @@ class Framework(object):
 
         if charges is None:
             charges = np.zeros(len(sites))
+        elif len(charges) != len(sites):
+            raise ValueError("`charges` must contain one value per site.")
 
         if site_types is None:
             # assuming that site labels are atoms with suffixes like _1, _2, etc.
-            site_types = [s.rstrip("_0123456789") for s in sites]
+            site_types = [str(s).rstrip("_0123456789") for s in sites]
+        elif len(site_types) != len(sites):
+            raise ValueError("`site_types` must contain one value per site.")
 
         self._dataframe = pd.DataFrame(
             {
@@ -341,23 +355,24 @@ class Framework(object):
         # molecules / unit cell -> cm3 (STP) / cm3
         molecules_uc__cm3_cm3 = vm_cm3_per_mol / (_AVOGADRO_CONSTANT * volume * 1e-24)
 
+        conversion_factors = {
+            "molecules_uc__mol_kg": molecules_uc__mol_kg,
+            "molecules_uc__cm3_g": molecules_uc__cm3_g,
+            "molecules_uc__cm3_cm3": molecules_uc__cm3_cm3,
+            "molecules/unitcell->mol/kg": molecules_uc__mol_kg,
+            "molecules/unitcell->cm3(STP)/g": molecules_uc__cm3_g,
+            "molecules/unitcell->cm3(STP)/cm3": molecules_uc__cm3_cm3,
+        }
+
         if adsorbate_molar_mass is not None:
             if adsorbate_molar_mass <= 0:
                 raise ValueError("Adsorbate molar mass must be positive.")
             # molecules / unit cell -> g / g
             molecules_uc__g_g = adsorbate_molar_mass / mass
-            return {
-                "molecules_uc__mol_kg": molecules_uc__mol_kg,
-                "molecules_uc__cm3_g": molecules_uc__cm3_g,
-                "molecules_uc__cm3_cm3": molecules_uc__cm3_cm3,
-                "molecules_uc__g_g": molecules_uc__g_g,
-            }
-        else:
-            return {
-                "molecules_uc__mol_kg": molecules_uc__mol_kg,
-                "molecules_uc__cm3_g": molecules_uc__cm3_g,
-                "molecules_uc__cm3_cm3": molecules_uc__cm3_cm3,
-            }
+            conversion_factors["molecules_uc__g_g"] = molecules_uc__g_g
+            conversion_factors["molecules/unitcell->g/g"] = molecules_uc__g_g
+
+        return conversion_factors
 
     def site_labels(self, as_list: bool = False) -> List[str] | pd.Series:
         """Return the site labels as a list or pandas Series.
@@ -455,6 +470,12 @@ class Framework(object):
             self._dataframe["site_charge"].sum(),
         )
 
+        for site_label, charge in zip(
+            self._dataframe["site_label"], self._dataframe["site_charge"]
+        ):
+            if site_label in self._force_field:
+                self._force_field[site_label]["charge"] = charge
+
     @staticmethod
     def _reduce_tilt_factors(box: tuple[float, ...]) -> tuple[float, ...]:
         """Reduce triclinic tilt factors to LAMMPS/FEASST canonical range.
@@ -529,6 +550,11 @@ class Framework(object):
             - Box parameters as a tuple (lx, ly, lz, xy, xz, yz)
             - Cell vectors as a tuple of three numpy arrays (a_vec, b_vec, c_vec)
         """
+        if len(unit_cells) != 3 or not all(
+            isinstance(n, int) and n > 0 for n in unit_cells
+        ):
+            raise ValueError("`unit_cells` must be three positive integers")
+
         nx, ny, nz = unit_cells
 
         # Create supercell lattice
@@ -864,7 +890,7 @@ class Framework(object):
             # second neighbors fingerprint
             second_shell_elements = set()
             for neighbor_idx, _ in first_shell_data:
-                for second_neighbor_idx, __ in all_neighbors.get(i, []):
+                for second_neighbor_idx, __ in all_neighbors.get(neighbor_idx, []):
                     if (
                         second_neighbor_idx != i
                         and second_neighbor_idx not in first_shell_indices
@@ -1070,6 +1096,16 @@ Site Properties
 
 """
         for site_label, site_parameters in self._force_field.items():
+            missing_parameters = [
+                parameter
+                for parameter in ("sigma", "epsilon", "charge")
+                if site_parameters.get(parameter) is None
+            ]
+            if missing_parameters:
+                missing = ", ".join(missing_parameters)
+                raise ValueError(
+                    f"Missing force field parameter(s) for {site_label}: {missing}."
+                )
             line = (
                 f"{site_label:<3} "
                 + f"sigma={site_parameters['sigma']:.5f} "

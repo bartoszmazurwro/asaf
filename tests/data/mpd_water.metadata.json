@@ -1,0 +1,12 @@
+{
+  "temperature": 298,
+  "temperature_unit": "K",
+  "beta_mu": -14.313696805080005,
+  "fugacity_sim": 2500,
+  "fugacity_sim_unit": "Pa",
+  "kB": 0.00831446261815324,
+  "beta_sim": 0.4035985068547854,
+  "beta_sim_unit": "mol/kJ",
+  "mu": -35.46518770999831,
+  "mu_unit": "kJ/mol"
+}

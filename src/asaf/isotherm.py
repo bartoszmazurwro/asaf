@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
 if TYPE_CHECKING:
-    from typing import Any, Dict, Optional, Union
-
     from numpy.typing import ArrayLike
     from plotly.graph_objects import Figure
 
@@ -20,9 +18,10 @@ class Isotherm:
 
     def __init__(
         self,
-        data: pd.DataFrame = None,
-        saturation_fugacity: Optional[float] = None,
-        metadata: Optional[dict[str, Any]] = None,
+        data: pd.DataFrame | None = None,
+        saturation_fugacity: float | None = None,
+        saturation_pressure: float | None = None,
+        metadata: dict[str, Any] | None = None,
         fugacity_unit: str = "Pa",
         uptake_unit: str = "molecules/unitcell",
     ) -> None:
@@ -33,18 +32,21 @@ class Isotherm:
         data
             A pandas DataFrame containing the adsorption data. Should contain 'pressure' and 'uptake' columns.
         saturation_fugacity
-            The saturation pressure at given conditions. Used to calculate the relative pressure.
+            The saturation fugacity at given conditions. Used to calculate relative fugacity (f/f0).
+        saturation_pressure
+            The saturation pressure at given conditions. Used to calculate relative pressure (p/p0).
         metadata
             A dictionary with the simulation metadata.
         uptake_unit
             Units at which uptake is stored. Default value is 'molecules/unitcell'.
         """
         self.dataframe = data
-        self.saturation_fugacity = saturation_fugacity
         self._metadata = {}
         self.metadata = metadata
         self._pressure_unit = fugacity_unit
         self._uptake_unit = uptake_unit
+        self.saturation_fugacity = saturation_fugacity
+        self.saturation_pressure = saturation_pressure
 
     @property
     def dataframe(self) -> pd.DataFrame:
@@ -52,11 +54,15 @@ class Isotherm:
         return self._dataframe
 
     @dataframe.setter
-    def dataframe(self, dataframe: pd.DataFrame) -> None:
+    def dataframe(self, dataframe: pd.DataFrame | None) -> None:
+        if dataframe is None:
+            raise ValueError("Isotherm data must be provided as a pandas DataFrame.")
+        if "uptake" not in dataframe.columns:
+            raise ValueError("Isotherm data must contain an 'uptake' column.")
         self._dataframe = dataframe
 
     @property
-    def pressure(self) -> Union[pd.Series, None]:
+    def pressure(self) -> pd.Series | None:
         """Return the pressure column."""
         if "pressure" in self._dataframe.columns:
             return self._dataframe["pressure"]
@@ -68,7 +74,7 @@ class Isotherm:
         self._dataframe["pressure"] = pressure
 
     @property
-    def fugacity(self) -> Union[pd.Series, None]:
+    def fugacity(self) -> pd.Series | None:
         """Return the fugacity column."""
         if "fugacity" in self._dataframe.columns:
             return self._dataframe["fugacity"]
@@ -76,15 +82,30 @@ class Isotherm:
             return None
 
     @property
-    def saturation_fugacity(self) -> float:
+    def saturation_fugacity(self) -> float | None:
         """Return the saturation fugacity."""
         return self._saturation_fugacity
 
     @saturation_fugacity.setter
     def saturation_fugacity(self, saturation_fugacity: float | None) -> None:
+        if saturation_fugacity is not None and saturation_fugacity <= 0:
+            raise ValueError("`saturation_fugacity` must be positive.")
         self._saturation_fugacity = saturation_fugacity
-        if saturation_fugacity is not None:
+        if saturation_fugacity is not None and self.fugacity is not None:
             self._dataframe["f/f0"] = self.fugacity / saturation_fugacity
+
+    @property
+    def saturation_pressure(self) -> float | None:
+        """Return the saturation pressure."""
+        return self._saturation_pressure
+
+    @saturation_pressure.setter
+    def saturation_pressure(self, saturation_pressure: float | None) -> None:
+        if saturation_pressure is not None and saturation_pressure <= 0:
+            raise ValueError("`saturation_pressure` must be positive.")
+        self._saturation_pressure = saturation_pressure
+        if saturation_pressure is not None and self.pressure is not None:
+            self._dataframe["p/p0"] = self.pressure / saturation_pressure
 
     @property
     def amount_adsorbed(self) -> pd.Series:
@@ -92,7 +113,7 @@ class Isotherm:
         return self.dataframe["uptake"]
 
     @property
-    def metastable_gas(self) -> Optional[pd.Series]:
+    def metastable_gas(self) -> pd.Series | None:
         """Return the metastable gas column, if it exists."""
         if "metastable_gas" in self._dataframe.columns:
             return self._dataframe["metastable_gas"]
@@ -100,7 +121,7 @@ class Isotherm:
             return None
 
     @property
-    def metastable_liq(self) -> Optional[pd.Series]:
+    def metastable_liq(self) -> pd.Series | None:
         """Return the metastable liquid column, if it exists."""
         if "metastable_liq" in self._dataframe.columns:
             return self._dataframe["metastable_liq"]
@@ -114,6 +135,10 @@ class Isotherm:
 
     def set_pressure_unit(self, target_unit: str, conversion_factor: float) -> None:
         """Convert the pressure column to the target unit using the provided conversion factor."""
+        if self.pressure is None:
+            raise ValueError(
+                "Cannot convert pressure units: no 'pressure' column found."
+            )
         self.pressure = self.pressure * conversion_factor
         self._pressure_unit = target_unit
 
@@ -123,64 +148,164 @@ class Isotherm:
         return self._uptake_unit
 
     def set_uptake_unit(
-        self, target_unit: str, conversion_factor: Optional[float] = None
+        self, target_unit: str, conversion_factor: float | None = None
     ) -> None:
         """Convert the uptake column to the target unit."""
-
-        def get_conversion_factor(current_unit: str, new_unit: str) -> float:
-            """Retrieve or compute the conversion factor between units.
-
-            This function looks for the conversion factor in the nested 'conversion_factors'
-            dictionary in metadata using both forward and reverse keys.
-            """
-            conv_factors = self.metadata.get("conversion_factors", {})
-            forward_key = f"{current_unit}->{new_unit}"
-            reverse_key = f"{new_unit}->{current_unit}"
-            key_a = f"molecules/unitcell->{current_unit}"
-            key_b = f"molecules/unitcell->{new_unit}"
-            if forward_key in conv_factors:
-                return conv_factors[forward_key]
-            elif reverse_key in conv_factors:
-                return 1 / conv_factors[reverse_key]
-            elif key_a in conv_factors and key_b in conv_factors:
-                return conv_factors[key_b] / conv_factors[key_a]
-            else:
-                raise ValueError(
-                    f"Conversion factor for {forward_key} was not provided and was not found in metadata."
-                )
-
-        # Determine the conversion factor, either using the provided value or computing it.
-        conversion_factor = conversion_factor or get_conversion_factor(
-            self.uptake_unit, target_unit
+        conversion_factor = self._uptake_conversion_factor(
+            target_unit, conversion_factor
         )
 
-        self.dataframe["uptake"] *= conversion_factor
+        self.dataframe["uptake"] = self.dataframe["uptake"] * conversion_factor
         if self.metastable_gas is not None:
-            self.dataframe["metastable_gas"] *= conversion_factor
+            self.dataframe["metastable_gas"] = (
+                self.dataframe["metastable_gas"] * conversion_factor
+            )
         if self.metastable_liq is not None:
-            self.dataframe["metastable_liq"] *= conversion_factor
+            self.dataframe["metastable_liq"] = (
+                self.dataframe["metastable_liq"] * conversion_factor
+            )
 
         self._uptake_unit = target_unit
 
+    def _uptake_conversion_factor(
+        self, target_unit: str, conversion_factor: float | None = None
+    ) -> float:
+        """Return the uptake conversion factor from the current unit to target unit."""
+        if target_unit == self.uptake_unit:
+            return 1.0
+        if conversion_factor is not None:
+            return conversion_factor
+
+        conv_factors = self.metadata.get("conversion_factors", {})
+        current_unit = self.uptake_unit
+        forward_key = f"{current_unit}->{target_unit}"
+        reverse_key = f"{target_unit}->{current_unit}"
+
+        if forward_key in conv_factors:
+            return conv_factors[forward_key]
+        if reverse_key in conv_factors:
+            return 1 / conv_factors[reverse_key]
+
+        base_unit = "molecules/unitcell"
+        key_a = f"{base_unit}->{current_unit}"
+        key_b = f"{base_unit}->{target_unit}"
+        if key_a in conv_factors and key_b in conv_factors:
+            return conv_factors[key_b] / conv_factors[key_a]
+
+        legacy_current = current_unit.replace("/", "_").replace(" ", "_")
+        legacy_target = target_unit.replace("/", "_").replace(" ", "_")
+        legacy_base = base_unit.replace("/", "_")
+        legacy_key_a = f"{legacy_base}__{legacy_current}"
+        legacy_key_b = f"{legacy_base}__{legacy_target}"
+        if legacy_current == legacy_base and legacy_key_b in conv_factors:
+            return conv_factors[legacy_key_b]
+        if legacy_target == legacy_base and legacy_key_a in conv_factors:
+            return 1 / conv_factors[legacy_key_a]
+        if legacy_key_a in conv_factors and legacy_key_b in conv_factors:
+            return conv_factors[legacy_key_b] / conv_factors[legacy_key_a]
+
+        raise ValueError(
+            f"Conversion factor for {forward_key} was not provided and was not found in metadata."
+        )
+
     @property
-    def metadata(self) -> Dict[str, Any]:
+    def metadata(self) -> dict[str, Any]:
         """Return the metadata dictionary."""
         return self._metadata
 
     @metadata.setter
-    def metadata(self, metadata: Dict[str, Any]) -> None:
+    def metadata(self, metadata: dict[str, Any] | None) -> None:
         if metadata:
             for k, v in metadata.items():
                 self._metadata[k] = v
 
+    @staticmethod
+    def _axis_definitions() -> dict[str, tuple[tuple[str, ...], str]]:
+        """Return supported x-axis aliases, candidate dataframe columns and titles."""
+        return {
+            "pressure": (("pressure",), "Pressure ({unit})"),
+            "fugacity": (("fugacity",), "Fugacity ({unit})"),
+            "relative_pressure": (
+                ("p/p0", "relative_pressure", "relative pressure"),
+                "p/p0",
+            ),
+            "p/p0": (("p/p0", "relative_pressure", "relative pressure"), "p/p0"),
+            "relative_fugacity": (
+                ("f/f0", "relative_fugacity", "relative fugacity"),
+                "f/f0",
+            ),
+            "f/f0": (("f/f0", "relative_fugacity", "relative fugacity"), "f/f0"),
+            "relative_humidity": (
+                ("relative_humidity", "relative humidity", "RH", "rh"),
+                "Relative humidity",
+            ),
+            "humidity": (
+                ("relative_humidity", "relative humidity", "RH", "rh"),
+                "Relative humidity",
+            ),
+            "rh": (
+                ("relative_humidity", "relative humidity", "RH", "rh"),
+                "Relative humidity",
+            ),
+        }
+
+    def _resolve_x_axis(self, x_axis: str) -> tuple[pd.Series, str]:
+        """Resolve a requested x-axis to an existing dataframe column and axis title."""
+        axis_definitions = self._axis_definitions()
+        auto_priority = (
+            "fugacity",
+            "pressure",
+            "relative_fugacity",
+            "relative_pressure",
+            "relative_humidity",
+        )
+
+        if x_axis == "auto":
+            for axis_name in auto_priority:
+                columns, title = axis_definitions[axis_name]
+                for column in columns:
+                    if column in self.dataframe.columns:
+                        return self.dataframe[column], title.format(
+                            unit=self.pressure_unit
+                        )
+            valid_columns = "', '".join(
+                sorted(
+                    {
+                        column
+                        for columns, _ in axis_definitions.values()
+                        for column in columns
+                    }
+                )
+            )
+            raise ValueError(
+                f"Isotherm data must contain at least one pressure-related column: '{valid_columns}'."
+            )
+
+        if x_axis not in axis_definitions:
+            valid = "', '".join(["auto", *axis_definitions])
+            raise ValueError(f"x_axis must be one of '{valid}'. Got {x_axis!r}.")
+
+        columns, title = axis_definitions[x_axis]
+        for column in columns:
+            if column in self.dataframe.columns:
+                return self.dataframe[column], title.format(unit=self.pressure_unit)
+
+        available = "', '".join(self.dataframe.columns)
+        expected = "', '".join(columns)
+        raise ValueError(
+            f"x_axis={x_axis!r} requires one of '{expected}', but dataframe columns are '{available}'."
+        )
+
     def plot(
         self,
-        label: Optional[str] = None,
-        fig: Optional[Figure] = None,
-        x_axis: str = "fugacity",
-        y_axis: str = "molecules/unitcell",
-        trace_kwargs: Optional[Dict[str, Any]] = None,
-        layout_kwargs: Optional[Dict[str, Any]] = None,
+        label: str | None = None,
+        fig: Figure | None = None,
+        x_axis: str = "auto",
+        y_axis: str | None = None,
+        trace_kwargs: dict[str, Any] | None = None,
+        layout_kwargs: dict[str, Any] | None = None,
+        uptake_conversion_factor: float | None = None,
+        show: bool = False,
     ) -> Figure:
         """Plot an isotherm (stable + metastable gas and / or liquid) and group all traces under a single legend entry.
 
@@ -189,11 +314,8 @@ class Isotherm:
         import plotly.colors as pc
         import plotly.graph_objects as go
 
-        # get or create figure
-        show_immediately = False
         if fig is None:
             fig = go.Figure()
-            show_immediately = True
 
         trace_kwargs = trace_kwargs or {}
         layout_kwargs = layout_kwargs or {}
@@ -211,31 +333,18 @@ class Isotherm:
             color = default_colors[calls % len(default_colors)]
             fig._plot_calls = calls + 1
 
-        axis_map = {
-            "pressure": (self.pressure, f"Pressure ({self.pressure_unit})"),
-            "fugacity": (self.fugacity, f"Fugacity ({self.pressure_unit})"),
-            "relative_pressure": (self._dataframe["p/p0"], "p/p₀"),
-            "p/p0": (self._dataframe["p/p0"], "p/p₀"),
-            "relative_fugacity": (self._dataframe["f/f0"], "f/f₀"),
-            "f/f0": (self._dataframe["f/f0"], "f/f₀"),
-        }
-
-        if x_axis not in axis_map:
-            valid = "', '".join(axis_map)
-            raise ValueError(f"x_axis must be one of '{valid}'. Got {x_axis!r}.")
-
-        x_vals, x_title = axis_map[x_axis]
-
-        original_unit = self.uptake_unit
-        if y_axis != original_unit:
-            self.set_uptake_unit(y_axis)
+        x_vals, x_title = self._resolve_x_axis(x_axis)
+        y_axis = y_axis or self.uptake_unit
+        y_factor = self._uptake_conversion_factor(y_axis, uptake_conversion_factor)
 
         legend_name = label or "Uptake"
-        lg = dict(legendgroup=legend_name)
+        legendgroup = f"asaf-isotherm-{getattr(fig, '_asaf_isotherm_groups', 0)}"
+        fig._asaf_isotherm_groups = getattr(fig, "_asaf_isotherm_groups", 0) + 1
+        lg = dict(legendgroup=legendgroup)
 
         default_stable = {
             "x": x_vals,
-            "y": self.amount_adsorbed,
+            "y": self.amount_adsorbed * y_factor,
             "mode": "lines+markers",
             "name": legend_name,
             "line": dict(color=color),
@@ -271,21 +380,24 @@ class Isotherm:
             **lg,
         }
 
-        meta_line = {**default_meta["line"], **user_line}
-        meta_trace_kwargs = {
-            **default_meta,
-            **trace_kwargs,
-            "line": meta_line,
-        }
+        meta_trace_kwargs = {**default_meta, **trace_kwargs}
 
         if self.metastable_gas is not None:
-            fig.add_trace(go.Scatter(y=self.metastable_gas, **meta_trace_kwargs))
+            gas_line = {**default_meta["line"], **user_line, "dash": "dash"}
+            fig.add_trace(
+                go.Scatter(
+                    y=self.metastable_gas * y_factor,
+                    **{**meta_trace_kwargs, "line": gas_line},
+                )
+            )
         if self.metastable_liq is not None:
-            fig.add_trace(go.Scatter(y=self.metastable_liq, **meta_trace_kwargs))
-
-        # restore original unit
-        if y_axis != original_unit:
-            self.set_uptake_unit(original_unit)
+            liq_line = {**default_meta["line"], **user_line, "dash": "dot"}
+            fig.add_trace(
+                go.Scatter(
+                    y=self.metastable_liq * y_factor,
+                    **{**meta_trace_kwargs, "line": liq_line},
+                )
+            )
 
         base_layout = dict(
             font=dict(family="Helvetica Neue", size=14, color="black"),
@@ -317,13 +429,13 @@ class Isotherm:
         )
         fig.update_layout(**{**base_layout, **layout_kwargs})
 
-        if show_immediately:
+        if show:
             fig.show()
 
         return fig
 
     def to_aif(
-        self, filename: str, user_key_mapper: Optional[Dict[str, Any]] = None
+        self, filename: str, user_key_mapper: dict[str, Any] | None = None
     ) -> None:
         """Save the isotherm in an AIF file format.
 
@@ -352,7 +464,8 @@ class Isotherm:
             "_simltn_size": "system_size",
             "_simltn_forcefield_adsorptive": "molecule_force_field",
             "_simltn_forcefield_adsorbent": "framework_force_field",
-            "_units_pressure": "fugacity_units",
+            "_units_pressure": "pressure_units",
+            "_units_fugacity": "fugacity_units",
             "_units_loading": "loading_units",
         }
 
@@ -374,30 +487,50 @@ class Isotherm:
         block.set_pair("_units_loading", quote(self.uptake_unit))
         block.set_pair("_audit_aif_version", quote("63df4e8"))
 
-        df = self.dataframe
+        df = self.dataframe.copy()
+        column_map = (
+            ("pressure", "pressure"),
+            ("fugacity", "fugacity"),
+            ("p/p0", "relative_pressure"),
+            ("f/f0", "relative_fugacity"),
+            ("relative_humidity", "relative_humidity"),
+            ("relative humidity", "relative_humidity"),
+            ("RH", "relative_humidity"),
+            ("rh", "relative_humidity"),
+            ("metastable_gas", "amount_metastable_gas"),
+            ("metastable_liq", "amount_metastable_liq"),
+        )
 
-        if self.saturation_fugacity:
-            df["saturation_pressure"] = self.saturation_fugacity
-            loop_ads = block.init_loop(
-                "_adsorp_", ["pressure", "p0", "fugacity", "amount"]
+        loop_columns = []
+        loop_tags = []
+        for column, tag in column_map:
+            if column in df.columns:
+                loop_columns.append(column)
+                loop_tags.append(tag)
+
+        if self.saturation_pressure is not None and "pressure" in df.columns:
+            df["saturation_pressure"] = self.saturation_pressure
+            loop_columns.append("saturation_pressure")
+            loop_tags.append("p0")
+
+        if self.saturation_fugacity is not None and "fugacity" in df.columns:
+            df["saturation_fugacity"] = self.saturation_fugacity
+            loop_columns.append("saturation_fugacity")
+            loop_tags.append("f0")
+
+        if "uptake" not in loop_columns:
+            loop_columns.append("uptake")
+            loop_tags.append("amount")
+
+        if len(loop_columns) == 1:
+            raise ValueError(
+                "AIF export requires at least one pressure-related column in addition to 'uptake'."
             )
-            loop_ads.set_all_values(
-                [
-                    list(df["pressure"].values.astype(str)),
-                    list(df["saturation_pressure"].values.astype(str)),
-                    list(df["fugacity"].values.astype(str)),
-                    list(df["uptake"].values.astype(str)),
-                ]
-            )
-        else:
-            loop_ads = block.init_loop("_adsorp_", ["pressure", "fugacity", "amount"])
-            loop_ads.set_all_values(
-                [
-                    list(df["pressure"].values.astype(str)),
-                    list(df["fugacity"].values.astype(str)),
-                    list(df["uptake"].values.astype(str)),
-                ]
-            )
+
+        loop_ads = block.init_loop("_adsorp_", loop_tags)
+        loop_ads.set_all_values(
+            [list(df[column].values.astype(str)) for column in loop_columns]
+        )
 
         if filename.endswith(".aif"):
             filename = filename[:-4]
@@ -405,4 +538,4 @@ class Isotherm:
 
     def to_csv(self, filename: str) -> None:
         """Save the isotherm data to a CSV file."""
-        self.dataframe.to_csv(filename)
+        self.dataframe.to_csv(filename, index=False)

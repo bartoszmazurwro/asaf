@@ -77,20 +77,18 @@ class TestFrameworkInitialization:
 
     def test_init_with_matrix(self):
         """Test initialization with direct lattice matrix."""
-        matrix = np.array(
-            [
-                [10.0, 0.0, 0.0],
-                [1.0, 12.0, 0.0],  # with xy tilt component
-                [0.0, 1.0, 14.0],  # with yz tilt component
-            ]
-        )
+        matrix = [
+            [10.0, 0.0, 0.0],
+            [1.0, 12.0, 0.0],  # with xy tilt component
+            [0.0, 1.0, 14.0],  # with yz tilt component
+        ]
         fw = Framework(
             lattice=matrix,
             sites=["C_1"],
             coordinates=np.array([[0.5, 0.5, 0.5]]),
             lattice_as_matrix=True,
         )
-        np.testing.assert_array_equal(fw._lattice, matrix)
+        np.testing.assert_array_equal(fw._lattice, np.array(matrix, dtype=float))
 
     def test_init_validation_errors(self):
         """Test validation errors during initialization."""
@@ -109,6 +107,23 @@ class TestFrameworkInitialization:
                 lattice=np.eye(2),  # 2x2 instead of 3x3
                 sites=["C_1"],
                 coordinates=np.array([[0.0, 0.0, 0.0]]),
+                lattice_as_matrix=True,
+            )
+
+        with pytest.raises(ValueError, match="coordinates"):
+            Framework(
+                lattice=np.eye(3),
+                sites=["C_1"],
+                coordinates=np.array([[0.0, 0.0]]),
+                lattice_as_matrix=True,
+            )
+
+        with pytest.raises(ValueError, match="charges"):
+            Framework(
+                lattice=np.eye(3),
+                sites=["C_1"],
+                coordinates=np.array([[0.0, 0.0, 0.0]]),
+                charges=[0.0, 0.1],
                 lattice_as_matrix=True,
             )
 
@@ -240,6 +255,9 @@ class TestFrameworkProperties:
         assert conv["molecules_uc__mol_kg"] == pytest.approx(
             34.46136880556896, rel=1e-5, abs=1e-8
         )
+        assert conv["molecules/unitcell->mol/kg"] == pytest.approx(
+            conv["molecules_uc__mol_kg"]
+        )
         assert conv["molecules_uc__cm3_g"] == pytest.approx(
             772.4160708875229, rel=1e-5, abs=1e-8
         )
@@ -286,6 +304,13 @@ class TestChargeOperations:
 
     def test_reduce_net_charge(self, orthorhombic_framework):
         """Test net charge reduction."""
+        orthorhombic_framework.set_force_field(
+            {
+                "C": {"sigma": 3.4, "epsilon": 0.1, "charge": 0.10},
+                "O": {"sigma": 3.0, "epsilon": 0.2, "charge": -0.20},
+                "H": {"sigma": 2.5, "epsilon": 0.05, "charge": 0.05},
+            }
+        )
         orthorhombic_framework.reduce_net_charge()
         net = orthorhombic_framework.check_net_charge((1, 1, 1))
         assert abs(net) < 1e-12  # numerically ~0
@@ -299,6 +324,12 @@ class TestChargeOperations:
         expected = expected - expected.sum() / expected.size
         # Verify charges are updated correctly (within floating point tolerance)
         np.testing.assert_allclose(charges, expected, rtol=1e-10, atol=1e-10)
+        for site_label, expected_charge in zip(
+            orthorhombic_framework._dataframe["site_label"], expected
+        ):
+            assert orthorhombic_framework._force_field[site_label][
+                "charge"
+            ] == pytest.approx(expected_charge)
         # Test edge case: all charges zero
         fw = Framework(
             lattice=np.eye(3),
@@ -313,6 +344,9 @@ class TestChargeOperations:
 class TestSupercellCreation:
     def test_create_supercell(self, orthorhombic_framework):
         """Test supercell creation with various parameters."""
+        with pytest.raises(ValueError):
+            orthorhombic_framework.create_supercell((1, 0, 1))
+
         df, box, vectors = orthorhombic_framework.create_supercell((1, 1, 1))
         assert len(df) == 3
         assert len(box) == 6
@@ -461,6 +495,15 @@ class TestFileIO:
         with pytest.raises(ValueError):
             orthorhombic_framework.write_fstprt(tmp_path / "bad", unit_cells=(1, 1))
 
+    def test_write_fstprt_requires_complete_force_field(
+        self, orthorhombic_framework, tmp_path
+    ):
+        """Test clear error when force field parameters are incomplete."""
+        orthorhombic_framework.set_force_field({"C": {"charge": 0.0}})
+
+        with pytest.raises(ValueError, match="Missing force field"):
+            orthorhombic_framework.write_fstprt(tmp_path / "incomplete")
+
 
 class TestCifImport:
     @pytest.fixture
@@ -540,3 +583,27 @@ class TestAdvancedFeatures:
         for group_id, group_data in groups.items():
             assert math.isfinite(group_data["average_charge"])
             assert group_data["count"] >= 1
+
+    def test_group_sites_by_charge_uses_neighbor_second_shell(self):
+        """Test that second-shell fingerprints are built from first neighbors."""
+        fw = Framework(
+            lattice=np.eye(3) * 10.0,
+            sites=["C_1", "O_1", "H_1"],
+            site_types=["C", "O", "H"],
+            coordinates=np.array(
+                [
+                    [0.10, 0.10, 0.10],
+                    [0.20, 0.10, 0.10],
+                    [0.29, 0.10, 0.10],
+                ]
+            ),
+            charges=[0.1, -0.2, 0.1],
+            lattice_as_matrix=True,
+        )
+
+        groups = fw.group_sites_by_charge(max_cutoff=3.0)
+        carbon_group = next(
+            group for group in groups.values() if group["atom_labels"] == ["C_1"]
+        )
+
+        assert "'H'" in carbon_group["fingerprint"]

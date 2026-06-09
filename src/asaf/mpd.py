@@ -278,10 +278,10 @@ class MPD:
 
     def find_phase_equilibrium(
         self,
-            delta_beta_mu_guess: Optional[float] = None,
+        delta_beta_mu_guess: Optional[float] = None,
         tolerance: float = 1e-6,
         return_probabilities: bool = False,
-            max_delta_beta_mu: float = 8.0,
+        max_delta_beta_mu: float = 8.0,
     ) -> Union[Tuple[float, float, float], float]:
         """Find the fugacity at which the two phases are in equilibrium.
 
@@ -334,7 +334,7 @@ class MPD:
         single_phase_low_fraction = 0.25
 
         def phase_balance(
-                delta_beta_mu: float,
+            delta_beta_mu: float,
         ) -> dict[str, bool | float | None]:
             lnp_rw = lnp + delta_beta_mu * macrostate
             lnp_rw = lnp_rw - logsumexp(lnp_rw)
@@ -344,7 +344,7 @@ class MPD:
             if len(min_loc) > 0:
                 min_idx = int(min_loc[np.argmin(lnp_rw[min_loc])])
                 p_low = float(np.exp(logsumexp(lnp_rw[:min_idx])))
-                p_high = float(np.exp(logsumexp(lnp_rw[min_idx + 1:])))
+                p_high = float(np.exp(logsumexp(lnp_rw[min_idx + 1 :])))
                 return {
                     "delta": delta_beta_mu,
                     "balance": p_high - p_low,
@@ -369,9 +369,9 @@ class MPD:
             }
 
         def best_two_phase(
-                best: dict[str, bool | float | None] | None,
-                candidate: dict[str, bool | float | None],
-                prefer_low_side: bool = False,
+            best: dict[str, bool | float | None] | None,
+            candidate: dict[str, bool | float | None],
+            prefer_low_side: bool = False,
         ) -> dict[str, bool | float | None] | None:
             if not candidate["two_phase"]:
                 return best
@@ -384,16 +384,16 @@ class MPD:
             return best
 
         def bracket_in_direction(
-                direction: float,
-                start: dict[str, bool | float | None],
+            direction: float,
+            start: dict[str, bool | float | None],
         ) -> (
-                tuple[
-                    dict[str, bool | float | None],
-                    dict[str, bool | float | None],
-                    dict[str, bool | float | None] | None,
-                    dict[str, bool | float | None] | None,
-                ]
-                | None
+            tuple[
+                dict[str, bool | float | None],
+                dict[str, bool | float | None],
+                dict[str, bool | float | None] | None,
+                dict[str, bool | float | None] | None,
+            ]
+            | None
         ):
             previous = start
             best = best_two_phase(None, start)
@@ -422,9 +422,9 @@ class MPD:
 
         start = phase_balance(0.0)
         if (
-                start["two_phase"]
-                and abs(float(start["balance"])) <= tolerance
-                and float(start["balance"]) <= 0
+            start["two_phase"]
+            and abs(float(start["balance"])) <= tolerance
+            and float(start["balance"]) <= 0
         ):
             best = start
         else:
@@ -446,8 +446,8 @@ class MPD:
 
             for _ in range(80):
                 if (
-                        best_low_side is not None
-                        and abs(float(best_low_side["balance"])) <= tolerance
+                    best_low_side is not None
+                    and abs(float(best_low_side["balance"])) <= tolerance
                 ):
                     best = best_low_side
                     break
@@ -469,8 +469,8 @@ class MPD:
                     "No phase equilibrium found: distribution remains unimodal."
                 )
             if (
-                    best_low_side is not None
-                    and abs(float(best_low_side["balance"])) <= tolerance
+                best_low_side is not None
+                and abs(float(best_low_side["balance"])) <= tolerance
             ):
                 best = best_low_side
 
@@ -487,7 +487,7 @@ class MPD:
 
         min_idx = int(mins[mins.lnp == mins.lnp.min()].index[0])
         p_low = float(np.exp(logsumexp(lnp_eq["lnp"].iloc[:min_idx])))
-        p_high = float(np.exp(logsumexp(lnp_eq["lnp"].iloc[min_idx + 1:])))
+        p_high = float(np.exp(logsumexp(lnp_eq["lnp"].iloc[min_idx + 1 :])))
 
         equilibrium_beta_mu = self.beta_mu + delta_beta_mu_eq
         equilibrium_fugacity = mu_to_fugacity(
@@ -631,6 +631,7 @@ class MPD:
         self,
         fugacity: ArrayLike,
         saturation_fugacity: Optional[float] = None,
+        saturation_pressure: Optional[float] = None,
         pressure: Optional[ArrayLike] = None,
         order: Optional[int] = None,
         return_dataframe: bool = True,
@@ -642,7 +643,9 @@ class MPD:
         fugacity
             Array of fugacities.
         saturation_fugacity
-            Saturation pressure to calculate the pressure in relative scale (p/p0).
+            Saturation fugacity to calculate relative fugacity (f/f0).
+        saturation_pressure
+            Saturation pressure to calculate relative pressure (p/p0).
         pressure
             Array of pressures corresponding to the fugacities.
         order
@@ -704,6 +707,12 @@ class MPD:
 
         if pressure is not None:
             isotherm.insert(1, "pressure", np.array(pressure))
+            if saturation_pressure is not None:
+                isotherm.insert(2, "p/p0", isotherm["pressure"] / saturation_pressure)
+        elif saturation_pressure is not None:
+            raise ValueError(
+                "`pressure` must be provided to calculate relative pressure (p/p0)."
+            )
 
         if return_dataframe:
             return isotherm
@@ -711,6 +720,7 @@ class MPD:
             return Isotherm(
                 data=isotherm,
                 saturation_fugacity=saturation_fugacity,
+                saturation_pressure=saturation_pressure,
                 metadata=self.metadata,
             )
 

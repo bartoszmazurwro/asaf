@@ -89,6 +89,39 @@ def test_normalize_creates_unit_probability_distribution() -> None:
     assert probabilities.sum() == pytest.approx(1.0)
 
 
+def test_calculate_isotherm_separates_relative_pressure_and_fugacity(
+    monkeypatch,
+) -> None:
+    df = pd.DataFrame({"macrostate": [0, 1, 2], "lnp": np.log([0.2, 0.5, 0.3])})
+    mpd = MPD(dataframe=df, temperature=300.0, fugacity=1.0, order=1)
+    monkeypatch.setattr(
+        mpd,
+        "average_macrostate_at_fugacity",
+        lambda fug, order=None: [float(fug)],
+    )
+
+    isotherm = mpd.calculate_isotherm(
+        fugacity=np.array([10.0, 20.0]),
+        pressure=np.array([5.0, 10.0]),
+        saturation_fugacity=40.0,
+        saturation_pressure=100.0,
+    )
+
+    assert list(isotherm["f/f0"]) == [0.25, 0.5]
+    assert list(isotherm["p/p0"]) == [0.05, 0.1]
+
+
+def test_calculate_isotherm_requires_pressure_for_relative_pressure() -> None:
+    df = pd.DataFrame({"macrostate": [0, 1, 2], "lnp": np.log([0.2, 0.5, 0.3])})
+    mpd = MPD(dataframe=df, temperature=300.0, fugacity=1.0, order=1)
+
+    with pytest.raises(ValueError, match="pressure"):
+        mpd.calculate_isotherm(
+            fugacity=np.array([10.0, 20.0]),
+            saturation_pressure=100.0,
+        )
+
+
 def test_mpd_equilibrium_and_observables() -> None:
     """This test uses data from NIST SRWS
     (https://www.nist.gov/programs-projects/nist-standard-reference-simulation-website)
@@ -123,9 +156,7 @@ def test_phase_equilibrium_problematic_water_examples(data_path: Path) -> None:
     mpd = _water_mpd(data_path)
     initial_fugacity = mpd.fugacity
 
-    fugacity, p_low, p_high = mpd.find_phase_equilibrium(
-        return_probabilities=True
-    )  # type: ignore[misc]
+    fugacity, p_low, p_high = mpd.find_phase_equilibrium(return_probabilities=True)  # type: ignore[misc]
     delta_beta_mu = np.log(float(fugacity) / initial_fugacity)
 
     assert np.isfinite(float(fugacity))
