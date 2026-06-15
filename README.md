@@ -1,8 +1,5 @@
 # Quick and easy analysis of the data from the flat histogram simulations
 
-[![Tests](https://github.com/bartoszmazurwro/asaf/actions/workflows/tests.yml/badge.svg)](https://github.com/bartoszmazurwro/asaf/actions/workflows/tests.yml)
-[![Ruff](https://github.com/bartoszmazurwro/asaf/actions/workflows/ruff.yml/badge.svg)](https://github.com/bartoszmazurwro/asaf/actions/workflows/ruff.yml)
-[![Docs](https://github.com/bartoszmazurwro/asaf/actions/workflows/docs.yml/badge.svg)](https://github.com/bartoszmazurwro/asaf/actions/workflows/docs.yml)
 [![Codecov](https://codecov.io/gh/bartoszmazurwro/asaf/branch/main/graph/badge.svg)](https://codecov.io/gh/bartoszmazurwro/asaf)
 [![PyPI](https://img.shields.io/pypi/v/asaf.svg)](https://pypi.org/project/asaf/)
 [![Python versions](https://img.shields.io/pypi/pyversions/asaf.svg)](https://pypi.org/project/asaf/)
